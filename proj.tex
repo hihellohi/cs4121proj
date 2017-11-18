@@ -36,7 +36,7 @@
 \newtheorem*{lemma}{Lemma}
 \newtheorem*{theorem}{Theorem}
 
-\title{Modifying Markov Chains to Model Traffic Jams}
+\title{Modifying Markov Chains to Model Traffic}
 \author{Kevin Zihong Ni\\\texttt{z5025098}}
 
 \begin{document}
@@ -135,7 +135,7 @@ Putting this all together, we can construct $T$ with the following algorithm
 		\For{$v \in V$}
 			\For{$e \in \mathrm{incoming}(v)$}
 				\For{$'e \in \mathrm{outgoing}(v)$}
-					\State $T \gets T \cup {(e, e', P(e, e') l(e)}$
+					\State $T \gets T \cup \{(e, e', P(e, e') l(e))\}$
 				\EndFor
 			\EndFor
 		\EndFor
@@ -144,6 +144,66 @@ Putting this all together, we can construct $T$ with the following algorithm
 \end{algorithmic}
 
 \subsection{State Transitions}
+We define the current state of the road network as a row vector $\mathbf{v}$ where $v_i$ is an estimation of the number of cars on road $i$.
+Our algorithm will take the original state of the network $\mathbf{v}^{(0)}$ as input.
+To step this model forward in time, we will use a similar approach to that of a Markov Chain model --- 
+that is, we determine each subsequent state vector $\mathbf{v}^{(k + 1)}$ by multiplying the
+preceding vector $\mathbf{v}^{(k)}$ with a transition matrix.
+
+One naive solution would be to simply be use the adjacency matrix of $G'$ for this.
+While this may suffice for low density traffic, a number of problems arise as the capacities of individual roads fill up.
+\begin{itemize}
+	\item In this model, there is no theoretical limit on how many cars roads can accumulate.
+		We would ideally want to have a hard limit on each road $e$ proportional to $l(e)$.
+	\item Each road has no limit of cars it can "accept" in one timestep, wheras it should be limited to a constant.
+	\item The speed of traffic in the model is not at all affected by the density of the traffic when in reality, the speed should slow down in high traffic conditions.
+\end{itemize}
+
+We can address all these problems simultaneously by creating our transition matrix $M^{(k)}$ based on $\mathbf{v}^{(k)}$ such that these limits are respected.
+From there we can determine 
+$$\mathbf{v}^{(k + 1)} = M^{(k)}\mathbf{v}^{(k)}$$
+
+\subsection{Transition Matrix}
+First we define $M^B$ to be our adjacency matrix of $G'$. This matrix represents the flow of vehichles in the network if there was no loss of efficiency due to traffic.
+We also need to define a vector $\mathbf{c}$ which represents the capacities of each road. For each road $e$,
+$$
+\mathbf{c}_e = \frac{l(e)}{\mathrm{cargap}}
+$$
+where cargap is a constant representing the average gap between stationary cars (including the body of the leading car). In our experiments we used cargap = 8.
+
+All what we have described so far need only be calculated once during initialisation. To construct $M^{(k)}$ given $\mathbf{v}^{(k)}$, we first must calculate
+$\mathbf{h}^{(k)} = M^B \mathbf{v}^{(k)}$. This vector represents the maximum flow of traffic, given ideal conditions.
+we aim to construct $M^{(k)}$ by reducing the weights of $M^B$ based on $\mathbf{h}^{(k)}$ and $\mathbf{v}^{(k)}$. We need to calculate a "limit" vector, $\mathbf{l}^{(k)}$, where
+$\mathbf{l}^{(k)}_e$ is the maximum number of cars that can be accepted by road $e$ in the next timestep.
+For each road $e$, to impose a limit on the input capacity, we need to keep $\mathbf{l}^{(k)}_e \leq t/g$,
+where $g$ is the "time gap" between vehichles in seconds --- that is, at a fixed point on the road, what is the minimum amount of time after the previous car passing until the next car passes (we used $g = 3$ in our experiments).
+To impose a limit on the total capacity, we also need to keep $\mathbf{l}^{(k)}_e \leq \mathbf{c}_e - \mathbf{v}^{(k)}_e$.
+
+We take the min of these two values, resulting in
+
+$$\mathbf{l}^{(k)}_e = \min \left(\frac{t}{g}, \mathbf{c}_e - \mathbf{v}^{(k)}_e \right)$$
+
+The ratios that we need to reduce each column of $M^B$ by can be found by taking the elementwise division of $\mathbf{l}^{(k)}$ and $\mathbf{v}^{(k)}$,
+and taking the min of each element and 1. To apply these ratios to $M^B$, we construct a diagonal matrix $R^{(k)}$ such that 
+$$
+R^{(k)}_{e, e} = \min\left(\frac{\mathbf{l}^{(k)}_e}{\mathbf{v}^{(k)}_e}, 1 \right)
+$$
+Our change matrix can then be defined as
+$$
+C^{(k)} = M^B R^{(k)}
+$$
+
+Lastly, we need to make our matrix stochastic. To do this, we find the difference between the sum of each row and 1
+$$
+\mathbf{d}^{(k)} = \mathbf{e} - C^{(k)} \mathbf{e}
+$$
+where $\mathbf{e}$ is a row vector of length $|E|$ filled with ones.
+This vector represents the "discrepancy" in each row of $C{(k)}$. We will resolve this discrepancy by adding $\mathbf{r}^{(k)}$, to the diagonal of $C^{(k)}$, representing
+the cars in that road that remain in the same road for the duration of the timestep.
+
+Hence, if we define a matrix $D^{(k)}$ such that $ D^{(k)}_{e, e} = \mathbf{d}^{(k)}_e $ then
+
+$$M^{(k)} = C^{(k)} + D^{(k)}$$
 
 \printbibliography
 \end{document}
