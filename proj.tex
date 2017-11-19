@@ -47,7 +47,6 @@
 	In this paper, we will describe the modification and adaptation of a traditional discrete time Markov Chain to efficiently model how 
 	traffic jams evolve based on the live traffic conditions of every road in a network.
 	We will show how this model performed experimentally with respect to both accuracy and time.
-	We also will identify limitations in the model and techniques to mitigate them.
 \end{abstract}
 
 \section{Introduction}
@@ -75,7 +74,7 @@ Let this timestep be $t$.
 
 \subsection{Topology}
 We assume we are given a set of roads $E$ and a set of intersections $V$ together making a directed graph $G = (V, E)$.
-Every edge $e \in E$ also has a length $d(e)$ and a speed $s(e)$ associated with it.
+Every edge $e \in E$ also has a length in meters $d(e)$ and a speed in meters per second $s(e)$ associated with it.
 For simplicity, we also assume that $G$ has no self loops or parallel edges. These features can be trivially added to the model if necessary.
 
 We also make the reasonable assumption that $G$ is strongly connected.
@@ -204,6 +203,111 @@ the cars in that road that remain in the same road for the duration of the times
 Hence, if we define a matrix $D^{(k)}$ such that $ D^{(k)}_{e, e} = \mathbf{d}^{(k)}_e $ then
 
 $$M^{(k)} = C^{(k)} + D^{(k)}$$
+
+\section{Evaluation}
+\subsection{Time and Memory}
+Since the matrices we are working with are sparse (elements are predominatly zeroes), The memory complexity of the algorithm is $O(|T|)$, since we only need to keep track of
+the non zero entries of the matrix. Likewise, the matrix multiplications are also significantly faster compared to those of dense matrices, with each multiplication 
+(with a vector) running in $O(|T|)$. 
+
+Due to the highly "vectorised" definition of the algorithm, we can take advantage of existing, highly optimised linear algebra libraries; speeding up implementation and
+improving performance.
+
+\subsubsection{Performance Tests}
+Our tests ran on a computer with a Intel(R) Core(TM) i5-4670 CPU running at a clock speed of 3.4 GHz and 16 GB of RAM.
+We ran the algorithm for 3600 cycles over the Australian road network provided by PitneyBowes StreetPro v2015. 
+This network had $|N| = 3162911$, $|E| = 4001065$ and $|T| = 9407137$.
+No multithreading was used. 
+
+Our algorithm ran in $5681.56690120697$
+seconds, with an average of $1.57821302811$
+seconds per cycle. The program used less than 2GB of memory after initialization.
+
+\subsection{Accuracy}
+We chose to use the unchanged initial states as the baseline for our model, since this is the existing estimation that our model seeks to replace.
+We also evaluated how $t$ affects the accuracy of our model by running our model with it set to different values.
+Finally we wanted to see how the accuracy of our model deteriorates over time. 
+
+These tests were done under with the road network in two different conditions --- once where there was a major traffic jam and another under normal traffic conditions.
+
+\subsubsection{Accuracy Test Data Synthesis}
+Lacking real life data to evaluate our model against, we instead created synthetic data by simulating the movement of cars in the road network.
+We did this by keeping track of the locations of $n$ different "cars" in the network. 
+The original positions were initialised according to a gaussian distribution around a certain point in the network.
+When emulating a traffic jam, the standard deviation of this distribution was set very low, causing the cars to be generated very close to the selected point.
+When emulating regular traffic, the standard deviation of this distribution was set close to half of the radius of the selected area,
+causing the cars to be relatively uniformly.
+These cars performed a random walk around the network based on the predetermined turn probabilities. %TODO
+
+To introduce the road capacities to the network, we keep track of a "fullness" function $c(e)$ where $c(e)$ is the "apparent fullness" of $e$.
+By "apparent fullness", we mean how "full" a road appears from an observer at the "mouth" of the road trying to turn into it. This may possibly be greater than
+the number of cars actually in $e$, since, in a queue, human driven cars don't accelerate in unison but only accelerate after the car ahead of it starts to accelerate.
+This may cause gaps in the road that propagate backwards as cars move forwards to fill the gap.
+In addition, we use a system of 3 priority queues, all containing and ordered by a "time" value --- that is, the
+simulated time where the "event" that the queue entry is tracking takes place.
+\begin{enumerate}
+	\item A priority queue to keep track of cars in the middle of roads and when they will reach the next intersection. Each time a car comes off this queue, we append it
+		to a "waiting list" queue of the road that it is moving to (but we do NOT move it yet).
+	\item A priority queue to keep track of "gaps" in roads caused by cars leaving the road at the end and when they (the gaps) will reach the beginning of the road. 
+		Each time a road $e$ comes off this queue, we decrement $c(e)$, allowing for more cars to enter.
+	\item Each road must be locked for $g$ seconds after a car enters it in order to enforce a minimum gap between cars. Our third queue simply
+		keeps track of when these roads become unlocked.
+\end{enumerate}
+
+To run this simulation, we would take the earliest event in all 3 of these queues (however we only need to check the top of the queues since they are all min queues), and
+process it accordingly.
+Each time we do this, we need to check the "waiting list" queues of the appropriate road $e$ 
+(the road that the car is moving to for queue 1 and road in the queue entry for queues 2 and 3), and if it is not locked or at capacity, we move the car 
+into $e$.
+
+Each time a car $k$ successfully moves from a old road $e$ into a new road $e'$ at time $t$, in addition to incrementing $c(e)$, 
+we would also need to create appropriate new entries for the aforementioned queues.
+\begin{enumerate}
+	\item Add an entry to queue 1, containing $k$ with time value $t + d(e')/s(e')$.
+	\item Add an entry to queue 2, containing $e$ with time value $t + r * c(e)$, and $r$ 
+		is a constant representing the average time it takes for a driver to start
+		moving once the cars ahead of it start to move. We used $r = 2$.
+	\item Add an entry to queue 3, containing $e'$ with time value $t + g$.
+\end{enumerate}
+
+This simulation ran considerably slower than our Markov chain model and so we only tested a small subset of the road network, including areas within the Greater Sydney Metro 
+area. This smaller network had $|N| = 16443$, $|E| = 22639$ and $|T| = 81451$.
+
+We would run this simulation for an amount of simulated time and record the number of cars in each road at specified checkpoints.
+These checkpoints can then be used to evaluate our model by taking a certain checkpoint as an input vector, step it through time using the model and compare the resulting
+state of the network to later checkpoints.
+For our evaluation, we ran the simulation for an hour of simulated time and recorded a checkpoint at every minute.
+
+
+\subsubsection{Results}
+For all of our tests, We set our error value to be the euclidean distance between our current state vector and the target state vector (the L2 norm).
+Our results are as shown in figures \ref{fig:acc} and \ref{fig:reg} for traffic jam and regular traffic scenarios respectively (generated by matplotlib).
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{Results.png}
+	\caption{Accuracy of different models in a traffic jam}
+    \label{fig:acc}
+\end{figure}
+
+In terms of mid range accuracy, our model performs noticably better than the control in all cases with larger values of $t$ producing more accurate results.
+This advantage tapers off after $t = 60$. This can be attributed to models with longer timesteps being more "stable"; since models with smaller $t$ must perform 
+more multiplications to step forward a certain amount of time, allowing for more opportunities for errors to compound.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{Results2.png}
+	\caption{Accuracy of different models in regular traffic}
+    \label{fig:reg}
+\end{figure}
+
+While the results of our model still remains better than that of the control, an increase in $t$ now has an opposite effect to the traffic jam tests.
+
+One source of inaccuracy for high $t$ models is the fact that, in one timestep, they can at most only model the movement of cars into roads immediately adjacent to the ones
+that they are currently in.
+This becomes an issue when traffic flow is efficient, as cars may have moved to a road that are at higher degrees of separation within a span of a timestep.
+While this issue obviously also exists in low $t$ models, it is far less prevalent since cars will not be able to travel as far in that shorter timespan.
+This may explain our results as, when roads are saturated, traffic moves considerably more slowly and thus the main source of errors in high $t$ models are mitigated.
 
 \printbibliography
 \end{document}
